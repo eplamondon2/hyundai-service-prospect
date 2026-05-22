@@ -9,21 +9,61 @@ Variables d'environnement requises:
   DATABASE_URL = (optionnel, défaut: hyundai_prospect.db)
 """
 
-import os, re, time, sqlite3, logging
+import os, re, time, sqlite3, logging, json
 from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 VAUTO_USER = os.environ.get('VAUTO_USER', '')
 VAUTO_PASS = os.environ.get('VAUTO_PASS', '')
+VAUTO_COOKIES_JSON = os.environ.get('VAUTO_COOKIES', '')  # Cookies exportés de Chrome
 DB_PATH    = os.environ.get('DB_PATH', 'hyundai_prospect.db')
 
-VAUTO_URL       = 'https://provision.vauto.app.coxautoinc.com'
-VAUTO_LOGIN_URL = 'https://provision.vauto.app.coxautoinc.com/'
-SA_URL          = 'https://provision.vauto.app.coxautoinc.com/Va/Inventory/Stocking/ServiceAppointments/ServiceAppointmentsGrid.aspx'
+VAUTO_URL  = 'https://provision.vauto.app.coxautoinc.com'
+SA_URL     = 'https://provision.vauto.app.coxautoinc.com/Va/Inventory/Stocking/ServiceAppointments/ServiceAppointmentsGrid.aspx'
 
 # Filtre: exclure les véhicules trop récents (≤ N ans)
 ANNEE_MIN_OPPORTUNITE = datetime.now().year - 2  # ex: 2024 → exclure 2025+
+
+# Cookies d'authentification (convertis au format Playwright)
+def charger_cookies_depuis_env() -> list:
+    """
+    Charge les cookies depuis la variable d'env VAUTO_COOKIES.
+    Format: JSON exporté par Cookie-Editor Chrome.
+    """
+    if not VAUTO_COOKIES_JSON:
+        return []
+    try:
+        raw = json.loads(VAUTO_COOKIES_JSON)
+        cookies_playwright = []
+        for c in raw:
+            # Playwright utilise 'sameSite' avec majuscules spécifiques
+            same_site = c.get('sameSite', 'None')
+            if same_site in ['no_restriction', 'unspecified', None, '']:
+                same_site = 'None'
+            elif same_site == 'lax':
+                same_site = 'Lax'
+            elif same_site == 'strict':
+                same_site = 'Strict'
+
+            cookie = {
+                'name': c['name'],
+                'value': c['value'],
+                'domain': c['domain'],
+                'path': c.get('path', '/'),
+                'secure': c.get('secure', False),
+                'httpOnly': c.get('httpOnly', False),
+                'sameSite': same_site,
+            }
+            # Ajouter expiration si présente (pas pour les cookies session)
+            if 'expirationDate' in c:
+                cookie['expires'] = int(c['expirationDate'])
+            cookies_playwright.append(cookie)
+        log.info(f"🍪 {len(cookies_playwright)} cookies chargés depuis VAUTO_COOKIES")
+        return cookies_playwright
+    except Exception as e:
+        log.error(f"❌ Erreur chargement cookies: {e}")
+        return []
 
 logging.basicConfig(
     level=logging.INFO,
@@ -201,6 +241,16 @@ class ScraperVAuto:
             viewport={'width': 1400, 'height': 900},
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         )
+
+        # Injecter les cookies de session si disponibles
+        cookies = charger_cookies_depuis_env()
+        if cookies:
+            try:
+                context.add_cookies(cookies)
+                log.info(f"🍪 {len(cookies)} cookies injectés dans le navigateur")
+            except Exception as e:
+                log.warning(f"⚠️ Erreur injection cookies: {e}")
+
         self.page = context.new_page()
         log.info("🌐 Navigateur démarré")
 
@@ -674,11 +724,22 @@ def run_scraper(headless=True, evaluer=True):
     try:
         scraper.demarrer()
 
-        if not scraper.login():
-            return False
-
-        if not scraper.naviguer_service_appointments():
-            return False
+        # Si cookies disponibles → aller directement sur SA sans login
+        cookies_dispo = bool(VAUTO_COOKIES_JSON)
+        if cookies_dispo:
+            log.info("🍪 Mode cookies — pas de login nécessaire")
+            if not scraper.naviguer_service_appointments():
+                log.warning("⚠️ Cookies expirés? Tentative login...")
+                if not scraper.login():
+                    return False
+                if not scraper.naviguer_service_appointments():
+                    return False
+        else:
+            log.info("🔑 Mode login classique")
+            if not scraper.login():
+                return False
+            if not scraper.naviguer_service_appointments():
+                return False
 
         stats = scraper.scraper_tous_rdv()
         log.info(f"\n📊 Résultats import RDV:")
