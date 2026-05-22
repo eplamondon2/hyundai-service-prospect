@@ -1,1 +1,1 @@
-web: python app.py & python scheduler.py
+web: bash start.sh
