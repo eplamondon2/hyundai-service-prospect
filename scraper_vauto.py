@@ -18,9 +18,9 @@ VAUTO_USER = os.environ.get('VAUTO_USER', '')
 VAUTO_PASS = os.environ.get('VAUTO_PASS', '')
 DB_PATH    = os.environ.get('DB_PATH', 'hyundai_prospect.db')
 
-VAUTO_URL       = 'https://www.vauto.com'
-VAUTO_LOGIN_URL = 'https://provision.vauto.com/'
-SA_URL          = 'https://www.vauto.com/dashboard/service-appointments'
+VAUTO_URL       = 'https://provision.vauto.app.coxautoinc.com'
+VAUTO_LOGIN_URL = 'https://provision.vauto.app.coxautoinc.com/'
+SA_URL          = 'https://provision.vauto.app.coxautoinc.com/Va/Inventory/Stocking/ServiceAppointments/ServiceAppointmentsGrid.aspx'
 
 # Filtre: exclure les véhicules trop récents (≤ N ans)
 ANNEE_MIN_OPPORTUNITE = datetime.now().year - 2  # ex: 2024 → exclure 2025+
@@ -212,86 +212,143 @@ class ScraperVAuto:
         log.info("🔒 Navigateur fermé")
 
     def login(self) -> bool:
-        """Se connecte à vAuto."""
+        """Se connecte à vAuto via Cox Automotive SSO."""
         if not VAUTO_USER or not VAUTO_PASS:
             log.error("❌ VAUTO_USER et VAUTO_PASS non définis dans les variables d'environnement")
             return False
 
         log.info(f"🔑 Connexion à vAuto ({VAUTO_USER})...")
         try:
-            log.info(f"   → URL: {VAUTO_LOGIN_URL}")
-            self.page.goto(VAUTO_LOGIN_URL, wait_until='domcontentloaded', timeout=60000)
-            log.info(f"   → Page chargée: {self.page.url}")
-            log.info(f"   → Titre: {self.page.title()}")
-            time.sleep(4)
-
-            # Chercher les champs username/password
-            # vAuto peut avoir plusieurs sélecteurs selon la version
-            for sel_user in ['input[name="username"]', 'input[type="email"]',
-                              '#username', 'input[placeholder*="user" i]',
-                              'input[placeholder*="email" i]']:
-                if self.page.query_selector(sel_user):
-                    self.page.fill(sel_user, VAUTO_USER)
-                    break
-
-            for sel_pass in ['input[name="password"]', 'input[type="password"]',
-                              '#password']:
-                if self.page.query_selector(sel_pass):
-                    self.page.fill(sel_pass, VAUTO_PASS)
-                    break
-
-            # Cliquer login
-            for sel_btn in ['button[type="submit"]', 'input[type="submit"]',
-                             'button:has-text("Sign in")', 'button:has-text("Login")',
-                             'button:has-text("Connexion")']:
-                if self.page.query_selector(sel_btn):
-                    self.page.click(sel_btn)
-                    break
-
-            # Attendre la navigation
-            self.page.wait_for_load_state('domcontentloaded', timeout=30000)
+            # 1. Aller sur la page Service Appointments directement
+            # Cox redirige automatiquement vers le SSO si non connecté
+            log.info(f"   → Chargement: {SA_URL[:60]}")
+            self.page.goto(SA_URL, wait_until='domcontentloaded', timeout=60000)
             time.sleep(3)
+            log.info(f"   → Redirigé vers: {self.page.url[:80]}")
+            log.info(f"   → Titre: {self.page.title()}")
 
-            # Vérifier qu'on est connecté
-            if 'login' in self.page.url.lower():
-                log.error("❌ Login échoué — vérifier VAUTO_USER et VAUTO_PASS")
-                return False
+            # 2. Gérer la page de login Cox Automotive SSO
+            # L'URL contiendra 'login', 'sso', 'idp', 'signin' ou 'coxautoinc'
+            url_actuelle = self.page.url.lower()
+            tentatives = 0
 
-            log.info(f"✅ Connecté — URL: {self.page.url[:60]}")
-            return True
+            while any(mot in url_actuelle for mot in ['login', 'sso', 'signin', 'idp', 'auth']) and tentatives < 3:
+                tentatives += 1
+                log.info(f"   → Page login détectée (tentative {tentatives})")
+
+                # Chercher champ username/email
+                champ_user = None
+                for sel in ['input[name="username"]', 'input[name="email"]',
+                            'input[type="email"]', '#username', '#email',
+                            'input[placeholder*="user" i]', 'input[placeholder*="email" i]',
+                            'input[id*="user" i]', 'input[id*="email" i]']:
+                    el = self.page.query_selector(sel)
+                    if el and el.is_visible():
+                        champ_user = sel
+                        break
+
+                if champ_user:
+                    log.info(f"   → Champ username trouvé: {champ_user}")
+                    self.page.fill(champ_user, VAUTO_USER)
+                    time.sleep(0.5)
+
+                    # Parfois Cox sépare username et password en 2 étapes
+                    # Chercher bouton 'Next' ou 'Continue' d'abord
+                    for sel_next in ['button:has-text("Next")', 'button:has-text("Continue")',
+                                     'button:has-text("Suivant")', 'input[type="submit"]']:
+                        el = self.page.query_selector(sel_next)
+                        if el and el.is_visible():
+                            # Vérifier si le champ password est déjà visible
+                            pass_visible = self.page.query_selector('input[type="password"]')
+                            if not pass_visible:
+                                log.info(f"   → Clic Next pour accéder au mot de passe")
+                                el.click()
+                                self.page.wait_for_load_state('domcontentloaded', timeout=15000)
+                                time.sleep(2)
+                                break
+
+                # Chercher champ password
+                champ_pass = None
+                for sel in ['input[name="password"]', 'input[type="password"]',
+                            '#password', 'input[id*="pass" i]',
+                            'input[placeholder*="pass" i]', 'input[placeholder*="mot" i]']:
+                    el = self.page.query_selector(sel)
+                    if el and el.is_visible():
+                        champ_pass = sel
+                        break
+
+                if champ_pass:
+                    log.info(f"   → Champ password trouvé: {champ_pass}")
+                    self.page.fill(champ_pass, VAUTO_PASS)
+                    time.sleep(0.5)
+
+                    # Cliquer le bouton de soumission
+                    for sel_btn in ['button[type="submit"]', 'input[type="submit"]',
+                                    'button:has-text("Sign in")', 'button:has-text("Login")',
+                                    'button:has-text("Se connecter")', 'button:has-text("Submit")',
+                                    'button[id*="login" i]', 'button[id*="submit" i]']:
+                        el = self.page.query_selector(sel_btn)
+                        if el and el.is_visible():
+                            log.info(f"   → Clic submit: {sel_btn}")
+                            el.click()
+                            break
+                else:
+                    log.warning("   → Champ password non trouvé")
+                    # Prendre screenshot pour debug
+                    self.page.screenshot(path='/tmp/login_debug.png')
+                    log.info("   → Screenshot sauvegardé: /tmp/login_debug.png")
+
+                # Attendre la navigation
+                try:
+                    self.page.wait_for_load_state('domcontentloaded', timeout=30000)
+                except:
+                    pass
+                time.sleep(3)
+                url_actuelle = self.page.url.lower()
+                log.info(f"   → URL après soumission: {self.page.url[:80]}")
+
+            # 3. Vérifier qu'on est sur vAuto
+            url_finale = self.page.url.lower()
+            if 'vauto' in url_finale or 'coxautoinc' in url_finale:
+                if not any(mot in url_finale for mot in ['login', 'signin', 'sso', 'auth']):
+                    log.info(f"✅ Connecté — {self.page.url[:80]}")
+                    return True
+
+            # 4. Pas encore connecté — afficher ce qu'on voit
+            log.error(f"❌ Login échoué — URL finale: {self.page.url}")
+            log.error(f"   Titre: {self.page.title()}")
+            return False
 
         except PWTimeout:
-            log.error("❌ Timeout lors du login")
+            log.error(f"❌ Timeout — URL: {self.page.url}")
             return False
         except Exception as e:
             log.error(f"❌ Erreur login: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def naviguer_service_appointments(self) -> bool:
         """Navigue vers la page Service Appointments."""
         log.info("📋 Navigation vers Service Appointments...")
         try:
-            # Essayer l'URL directe d'abord
-            self.page.goto(SA_URL, wait_until='domcontentloaded', timeout=60000)
-            time.sleep(2)
+            # Après login, on est déjà sur SA — vérifier d'abord
+            url = self.page.url.lower()
+            if 'serviceappointments' in url:
+                log.info(f"✅ Déjà sur SA: {self.page.url[:80]}")
+                return True
 
-            # Si redirigé vers login, le login a expiré
-            if 'login' in self.page.url.lower():
-                log.warning("Session expirée, re-login...")
+            # Sinon naviguer explicitement vers l'URL exacte
+            log.info(f"   → Goto SA URL...")
+            self.page.goto(SA_URL, wait_until='domcontentloaded', timeout=60000)
+            time.sleep(3)
+            log.info(f"   → URL: {self.page.url[:80]}")
+            log.info(f"   → Titre: {self.page.title()}")
+
+            if 'login' in self.page.url.lower() or 'signin' in self.page.url.lower():
+                log.warning("Session expirée")
                 return False
 
-            # Chercher dans le menu si l'URL directe ne fonctionne pas
-            if 'service' not in self.page.url.lower():
-                for sel in ['a:has-text("Service")', 'a:has-text("Appointments")',
-                             '[href*="service"]']:
-                    el = self.page.query_selector(sel)
-                    if el:
-                        el.click()
-                        self.page.wait_for_load_state('networkidle', timeout=10000)
-                        time.sleep(2)
-                        break
-
-            log.info(f"✅ Page: {self.page.url[:80]}")
             return True
 
         except Exception as e:
