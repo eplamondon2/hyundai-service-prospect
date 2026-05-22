@@ -1,8 +1,2 @@
-[phases.setup]
-nixPkgs = ["chromium", "nss", "nspr", "atk", "cups", "libdrm", "mesa", "libgbm", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "xorg.libXkbcommon"]
-
-[phases.install]
-cmds = ["pip install -r requirements.txt", "playwright install chromium"]
-
 [start]
-cmd = "python app.py & python scheduler.py"
+cmd = "python app.py"

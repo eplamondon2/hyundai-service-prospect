@@ -1,5 +1,3 @@
 flask
 pdfplumber
-playwright
-schedule
 xlrd
