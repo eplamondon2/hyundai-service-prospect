@@ -1,5 +1,5 @@
 """
-parser_programme.py
+parser_programme.py — Version 2 corrigée
 Extrait le tableau des taux Hyundai depuis le PDF du programme mensuel.
 Usage: python parser_programme.py Programme.pdf [2026-05]
 """
@@ -24,10 +24,23 @@ def parse_dollar(val):
     try: return float(v.replace('$','').replace(',','').strip())
     except: return None
 
+MODELES_CONNUS = ['Elantra','Kona','Tucson','Santa Fe','Palisade',
+                  'Sonata','Venue','Ioniq','IONIQ']
+
+def extraire_am_modele(val):
+    """Extrait (annee, modele) depuis '2026AM Elantra' ou '2025MY Tucson PHEV'."""
+    if not val: return None, None
+    # Garder seulement la première ligne si multilignes
+    val = val.split('\n')[0].strip()
+    m = re.search(r'(20\d{2})', val)
+    annee = int(m.group(1)) if m else None
+    modele = re.sub(r'20\d{2}(AM|MY)?\s*', '', val).strip()
+    if any(k in modele for k in MODELES_CONNUS):
+        return annee, modele
+    return None, None
+
 def extraire_tableau_taux(pdf_path):
-    records, modele_courant, annee_courant = [], None, None
-    MODELES_CONNUS = ['Elantra','Kona','Tucson','Santa Fe','Palisade',
-                      'Sonata','Venue','Ioniq','IONIQ']
+    all_items = []
 
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages):
@@ -39,48 +52,75 @@ def extraire_tableau_taux(pdf_path):
 
                 for row in table:
                     if len(row) < 25: continue
-                    mod_val = nettoyer(row[1])
-                    if mod_val and any(m in mod_val for m in MODELES_CONNUS):
-                        m = re.search(r'(20\d{2})', mod_val)
-                        annee_courant = int(m.group(1)) if m else annee_courant
-                        modele_courant = re.sub(r'20\d{2}(AM|MY)?\s*', '', mod_val).strip()
-
                     version = nettoyer(row[2])
                     pdsf = parse_dollar(row[3])
                     if not version or not pdsf: continue
 
-                    records.append({
-                        'annee_modele': annee_courant,
-                        'modele': modele_courant,
+                    mod_val = nettoyer(row[1])
+                    annee, modele = extraire_am_modele(mod_val)
+                    all_items.append({
+                        'row': row,
+                        'annee': annee,
+                        'modele': modele,
                         'version': version,
                         'pdsf': pdsf,
-                        'rabais_comptant': parse_dollar(row[4]),
-                        'rabais_fidelite': parse_dollar(row[5]),
-                        'comptant_financement': parse_dollar(row[6]),
-                        'reduc_fid_fin': parse_pct(row[7]),
-                        'taux_fin_24': parse_pct(row[8]),
-                        'taux_fin_36': parse_pct(row[9]),
-                        'taux_fin_48': parse_pct(row[10]),
-                        'taux_fin_60': parse_pct(row[11]),
-                        'taux_fin_72': parse_pct(row[12]),
-                        'taux_fin_84': parse_pct(row[13]),
-                        'taux_fin_96': parse_pct(row[14]),
-                        'comptant_location': parse_dollar(row[15]),
-                        'reduc_fid_loc': parse_pct(row[16]),
-                        'taux_loc_24': parse_pct(row[17]),
-                        'taux_loc_33': parse_pct(row[18]),
-                        'taux_loc_36': parse_pct(row[19]),
-                        'taux_loc_39': parse_pct(row[20]),
-                        'taux_loc_48': parse_pct(row[21]),
-                        'taux_loc_60': parse_pct(row[22]),
-                        'resid_24': parse_pct(row[23]),
-                        'resid_33': parse_pct(row[24]),
-                        'resid_36': parse_pct(row[25]),
-                        'resid_39': parse_pct(row[26]),
-                        'resid_48': parse_pct(row[27]),
-                        'resid_60': parse_pct(row[28]),
-                        'page_source': page_num + 1,
                     })
+
+    # --- Propagation forward ---
+    annee_cur, modele_cur = None, None
+    for item in all_items:
+        if item['annee']: annee_cur = item['annee']
+        if item['modele']: modele_cur = item['modele']
+        if not item['annee']: item['annee'] = annee_cur
+        if not item['modele']: item['modele'] = modele_cur
+
+    # --- Propagation backward (lignes orphelines avant le 1er label) ---
+    premier_annee, premier_modele = None, None
+    for item in all_items:
+        if item['modele']:
+            premier_annee, premier_modele = item['annee'], item['modele']
+            break
+    for item in all_items:
+        if not item['modele']:
+            item['annee'] = premier_annee
+            item['modele'] = premier_modele
+
+    # --- Construire les records ---
+    records = []
+    for item in all_items:
+        row = item['row']
+        records.append({
+            'annee_modele': item['annee'],
+            'modele': item['modele'],
+            'version': item['version'],
+            'pdsf': item['pdsf'],
+            'rabais_comptant':      parse_dollar(row[4]),
+            'rabais_fidelite':      parse_dollar(row[5]),
+            'comptant_financement': parse_dollar(row[6]),
+            'reduc_fid_fin':        parse_pct(row[7]),
+            'taux_fin_24': parse_pct(row[8]),
+            'taux_fin_36': parse_pct(row[9]),
+            'taux_fin_48': parse_pct(row[10]),
+            'taux_fin_60': parse_pct(row[11]),
+            'taux_fin_72': parse_pct(row[12]),
+            'taux_fin_84': parse_pct(row[13]),
+            'taux_fin_96': parse_pct(row[14]),
+            'comptant_location': parse_dollar(row[15]),
+            'reduc_fid_loc':     parse_pct(row[16]),
+            'taux_loc_24': parse_pct(row[17]),
+            'taux_loc_33': parse_pct(row[18]),
+            'taux_loc_36': parse_pct(row[19]),
+            'taux_loc_39': parse_pct(row[20]),
+            'taux_loc_48': parse_pct(row[21]),
+            'taux_loc_60': parse_pct(row[22]),
+            'resid_24': parse_pct(row[23]),
+            'resid_33': parse_pct(row[24]),
+            'resid_36': parse_pct(row[25]),
+            'resid_39': parse_pct(row[26]),
+            'resid_48': parse_pct(row[27]),
+            'resid_60': parse_pct(row[28]),
+            'page_source': 0,
+        })
     return records
 
 def sauvegarder_sqlite(records, db_path, mois):
@@ -99,7 +139,8 @@ def sauvegarder_sqlite(records, db_path, mois):
         resid_39 REAL, resid_48 REAL, resid_60 REAL, page_source INTEGER)''')
     c.execute("DELETE FROM programmes WHERE mois=?", (mois,))
     for r in records:
-        c.execute('''INSERT INTO programmes VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        c.execute('''INSERT INTO programmes VALUES
+            (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (mois, r['annee_modele'], r['modele'], r['version'], r['pdsf'],
              r['rabais_comptant'], r['rabais_fidelite'], r['comptant_financement'], r['reduc_fid_fin'],
              r['taux_fin_24'], r['taux_fin_36'], r['taux_fin_48'], r['taux_fin_60'],
@@ -118,8 +159,9 @@ if __name__ == '__main__':
     print(f"📄 Extraction: {pdf_file}")
     records = extraire_tableau_taux(pdf_file)
     print(f"   {len(records)} entrées extraites")
-    for r in records[:3]:
-        print(f"   {r['annee_modele']} {r['modele']} | {r['version'][:30]} | PDSF: ${r['pdsf']:,.0f}")
+    print("\nAperçu:")
+    for r in records[:5]:
+        print(f"  {r['annee_modele']} {r['modele']:20} | {r['version']:30} | ${r['pdsf']:,.0f}")
     sauvegarder_sqlite(records, 'hyundai_prospect.db', mois)
     with open(f'programme_{mois}.json','w',encoding='utf-8') as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
