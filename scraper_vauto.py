@@ -19,7 +19,7 @@ VAUTO_PASS = os.environ.get('VAUTO_PASS', '')
 DB_PATH    = os.environ.get('DB_PATH', 'hyundai_prospect.db')
 
 VAUTO_URL       = 'https://www.vauto.com'
-VAUTO_LOGIN_URL = 'https://www.vauto.com/login'
+VAUTO_LOGIN_URL = 'https://provision.vauto.com/'
 SA_URL          = 'https://www.vauto.com/dashboard/service-appointments'
 
 # Filtre: exclure les véhicules trop récents (≤ N ans)
@@ -219,8 +219,11 @@ class ScraperVAuto:
 
         log.info(f"🔑 Connexion à vAuto ({VAUTO_USER})...")
         try:
-            self.page.goto(VAUTO_LOGIN_URL, wait_until='networkidle', timeout=30000)
-            time.sleep(2)
+            log.info(f"   → URL: {VAUTO_LOGIN_URL}")
+            self.page.goto(VAUTO_LOGIN_URL, wait_until='domcontentloaded', timeout=60000)
+            log.info(f"   → Page chargée: {self.page.url}")
+            log.info(f"   → Titre: {self.page.title()}")
+            time.sleep(4)
 
             # Chercher les champs username/password
             # vAuto peut avoir plusieurs sélecteurs selon la version
@@ -246,7 +249,7 @@ class ScraperVAuto:
                     break
 
             # Attendre la navigation
-            self.page.wait_for_load_state('networkidle', timeout=15000)
+            self.page.wait_for_load_state('domcontentloaded', timeout=30000)
             time.sleep(3)
 
             # Vérifier qu'on est connecté
@@ -269,7 +272,7 @@ class ScraperVAuto:
         log.info("📋 Navigation vers Service Appointments...")
         try:
             # Essayer l'URL directe d'abord
-            self.page.goto(SA_URL, wait_until='networkidle', timeout=20000)
+            self.page.goto(SA_URL, wait_until='domcontentloaded', timeout=60000)
             time.sleep(2)
 
             # Si redirigé vers login, le login a expiré
