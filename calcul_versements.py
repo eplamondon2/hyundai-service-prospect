@@ -18,9 +18,14 @@ TVQ  = 0.09975
 TAXE_TOTALE = TPS + TVQ          # 14.975%
 FRAIS_ADMIN_STANDARD = 799.00    # max concessionnaire (ICE/HEV)
 FRAIS_ADMIN_VE       = 599.00    # max concessionnaire (VÉ/PHEV)
-FRAIS_LIVRAISON = {              # AM26 par défaut
-    'Elantra': 1900, 'Sonata': 1975, 'Venue': 2050, 'Kona': 2050,
-    'Tucson': 2050, 'Santa Fe': 2100, 'Palisade': 2100,
+TAXE_CLIMATISEUR     = 100.00    # Taxe fédérale fixe sur climatiseur (avant taxes de vente)
+TAXE_PNEUS_NEUFS     = 22.50     # Taxe provinciale sur pneus neufs (avant taxes de vente)
+FRAIS_LIVRAISON = {              # AM26 par défaut (incluent déjà livraison + destination)
+    'Elantra': 1900, 'Elantra HEV': 1900, 'Elantra N': 1900,
+    'Sonata': 1975,
+    'Venue': 2050, 'Kona': 2050, 'Kona EV': 2050,
+    'Tucson': 2050, 'Tucson HEV': 2050, 'Tucson PHEV': 2050,
+    'Santa Fe': 2100, 'Palisade': 2100, 'Palisade HEV': 2100,
     'Ioniq 5': 2050, 'Ioniq 6': 2050, 'Ioniq 9': 2050,
     'default': 2050
 }
@@ -65,8 +70,11 @@ class ScenarioFinancement:
         self.calculer()
 
     def calculer(self):
-        rabais_total = self.rabais + self.comptant_fin
-        self.prix_avant_taxe = self.pdsf - rabais_total + self.frais_admin + self.frais_livraison
+        # Pour financement subventionné: utiliser comptant_financement seulement
+        # rabais est le rabais cash (non subventionné), non applicable ici
+        rabais_total = self.comptant_fin
+        self.prix_avant_taxe = (self.pdsf - rabais_total + self.frais_admin
+                                + self.frais_livraison + TAXE_CLIMATISEUR + TAXE_PNEUS_NEUFS)
         self.prix_total = self.prix_avant_taxe * (1 + TAXE_TOTALE)
         self.montant_finance = self.prix_total - self.mise_de_fonds
         if self.montant_finance <= 0:
@@ -108,8 +116,10 @@ class ScenarioLocation:
         Formule location SFHM standard:
         Versement = (Valeur_financement - Résiduel_actualisé) × Facteur_location + Taxe
         """
-        rabais_total = self.rabais + self.comptant_loc
-        self.prix_avant_taxe = self.pdsf - rabais_total + self.frais_admin + self.frais_livraison
+        # Pour location subventionnée: utiliser comptant_location seulement
+        rabais_total = self.comptant_loc
+        self.prix_avant_taxe = (self.pdsf - rabais_total + self.frais_admin
+                                + self.frais_livraison + TAXE_CLIMATISEUR + TAXE_PNEUS_NEUFS)
 
         # Ajustement kilométrage (base 16,000 km/an)
         # +2% pour 20,000 km/an, +3% pour 24,000 km/an selon le programme

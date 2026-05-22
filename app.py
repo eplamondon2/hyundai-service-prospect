@@ -362,7 +362,7 @@ FICHE_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
       <div class="montant">${{ "{:,.0f}".format(scenarios.fin.versement_mensuel) }}/mois</div>
       <div style="margin-top:8px;font-size:.85rem;color:#555">
         PDSF: ${{ "{:,.0f}".format(scenarios.fin.pdsf) }}<br>
-        Rabais: -${{ "{:,.0f}".format(scenarios.fin.rabais + scenarios.fin.comptant_fin) }}<br>
+        Rabais Hyundai: -${{ "{:,.0f}".format(scenarios.fin.comptant_fin) }}<br>
         Prix avant taxe: ${{ "{:,.0f}".format(scenarios.fin.prix_avant_taxe) }}<br>
         Montant financé (avec taxe): ${{ "{:,.0f}".format(scenarios.fin.montant_finance) }}
       </div>
@@ -571,7 +571,8 @@ CALC_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
         <div style="font-size:.85rem;color:#555;margin-top:8px">
           Taux: {{ scenarios.fin.taux_annuel }}% | Terme: {{ scenarios.fin.terme_mois }} mois<br>
           PDSF: ${{ "{:,.0f}".format(scenarios.fin.pdsf) }}<br>
-          Rabais total: -${{ "{:,.0f}".format(scenarios.fin.rabais + scenarios.fin.comptant_fin) }}<br>
+          Rabais Hyundai: -${{ "{:,.0f}".format(scenarios.fin.comptant_fin) }}<br>
+          Livraison ${{ "{:,.0f}".format(scenarios.fin.frais_livraison) }} + admin ${{ "{:,.0f}".format(scenarios.fin.frais_admin) }} + clim $100 + pneus $22.50<br>
           Prix avant taxe: ${{ "{:,.0f}".format(scenarios.fin.prix_avant_taxe) }}<br>
           <strong>Montant financé TTC: ${{ "{:,.0f}".format(scenarios.fin.montant_finance) }}</strong>
         </div>
