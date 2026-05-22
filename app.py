@@ -5,9 +5,14 @@ Accès:  http://localhost:5000
 """
 
 from flask import Flask, render_template_string, request, jsonify, redirect, url_for
-import sqlite3, json, os, csv, io
+import sqlite3, json, os, csv, io, re, re
 from datetime import datetime
 from calcul_versements import MoteurVersements, VehiculeClient
+try:
+    import xlrd
+    XLRD_OK = True
+except ImportError:
+    XLRD_OK = False
 
 app = Flask(__name__)
 DB = 'hyundai_prospect.db'
@@ -428,24 +433,23 @@ IMPORT_HTML = BASE_HTML.replace('{% block content %}{% endblock %}', '''
     </form>
   </div>
 
-  <div class="card">
-    <h2>📂 Import CSV (liste vAuto)</h2>
+  <div class="card" style="border:2px solid var(--bleu)">
+    <h2>📊 Import XLS — vAuto Service Appointments <span style="background:#1a8a1a;color:white;font-size:.75rem;padding:2px 8px;border-radius:10px;margin-left:8px">RECOMMANDÉ</span></h2>
     <p style="color:#666;font-size:.88rem;margin-bottom:12px">
-      Collez le contenu de votre export vAuto ou Serti ci-dessous.<br>
-      Format attendu: <code>Date,Heure,Nom,Téléphone,Email,Année,Marque,Modèle,Version,VIN,KM</code>
+      Dans vAuto → Stock → Service Appointments → cliquez l'icône <strong>Export XLS</strong> en haut à droite → uploadez le fichier ici.
     </p>
-    <form method="POST" action="/import/csv" enctype="multipart/form-data">
-      <label>Coller CSV ici:</label>
-      <textarea name="csv_data" rows="12" placeholder="Date,Heure,Nom,Telephone,Email,Annee,Marque,Modele,Version,VIN,KM
-05/22/2026,08:30,Jean Tremblay,(418) 555-1234,,2021,Hyundai,Elantra,Preferred,KM8...,78000
-..."></textarea>
-      <p style="text-align:center;color:#aaa;margin:8px 0">— ou —</p>
-      <label>Fichier CSV:</label>
-      <input type="file" name="csv_file" accept=".csv,.txt" style="border:none;padding:0">
-      <label style="margin-top:12px">
-        <input type="checkbox" name="remplacer" style="width:auto"> Remplacer les doublons (même VIN)
-      </label>
-      <button type="submit" class="btn btn-primary" style="margin-top:14px;width:100%">📥 Importer la liste</button>
+    <form method="POST" action="/import/xls" enctype="multipart/form-data">
+      <div style="border:2px dashed #b3d4f0;border-radius:8px;padding:20px;text-align:center;margin-bottom:12px;background:#f8fbff">
+        <div style="font-size:2rem;margin-bottom:8px">📁</div>
+        <label style="display:block;cursor:pointer;color:var(--bleu);font-weight:700">
+          Cliquer pour sélectionner le fichier XLS
+          <input type="file" name="xls_file" accept=".xls,.xlsx" style="display:none" onchange="document.getElementById('nom_fichier').textContent=this.files[0]?.name||''">
+        </label>
+        <div id="nom_fichier" style="margin-top:6px;color:#888;font-size:.85rem"></div>
+      </div>
+      <button type="submit" class="btn btn-success" style="width:100%;font-size:1rem;padding:12px">
+        📥 Importer les RDV vAuto
+      </button>
     </form>
   </div>
 </div>
@@ -761,6 +765,105 @@ def import_manuel():
         datetime.now().strftime('%Y-%m-%d'), 'manuel'))
     conn.commit(); conn.close()
     return redirect('/import?msg=Client+ajouté+avec+succès')
+
+
+def parser_xls_vauto(contenu_bytes):
+    """Parse le fichier XLS exporté de vAuto Service Appointments."""
+    if not XLRD_OK:
+        return [], "xlrd non installé — ajoutez xlrd dans requirements.txt"
+    try:
+        wb = xlrd.open_workbook(file_contents=contenu_bytes)
+        ws = wb.sheet_by_index(0)
+    except Exception as e:
+        return [], str(e)
+
+    records = []
+    for row_idx in range(1, ws.nrows):
+        try:
+            date_str    = str(ws.cell_value(row_idx, 1)).strip()
+            veh_titre   = str(ws.cell_value(row_idx, 2)).strip()
+            vin         = str(ws.cell_value(row_idx, 3)).strip()
+            km_raw      = ws.cell_value(row_idx, 4)
+            prenom      = str(ws.cell_value(row_idx, 12)).strip()
+            nom_famille = str(ws.cell_value(row_idx, 13)).strip()
+            adresse     = str(ws.cell_value(row_idx, 14)).strip()
+            ville       = str(ws.cell_value(row_idx, 15)).strip()
+            code_postal = str(ws.cell_value(row_idx, 16)).strip()
+            email       = str(ws.cell_value(row_idx, 17)).strip()
+            telephone   = str(ws.cell_value(row_idx, 18)).strip()
+
+            m = re.match(r'(\d{2}/\d{2}/\d{4})\s+(\d+:\d+:\d+\s*[AP]M)', date_str)
+            if m:
+                d = datetime.strptime(m.group(1), '%m/%d/%Y')
+                t = datetime.strptime(m.group(2).strip(), '%I:%M:%S %p')
+                date_rdv  = d.strftime('%Y-%m-%d')
+                heure_rdv = t.strftime('%H:%M')
+            else:
+                date_rdv, heure_rdv = date_str[:10], ''
+
+            m_veh = re.match(r'(\d{4})\s+(\w+)\s+(.+)', veh_titre)
+            if not m_veh:
+                continue
+            annee_veh = int(m_veh.group(1))
+            marque    = m_veh.group(2)
+            reste     = m_veh.group(3).strip()
+            modele, version = reste, ''
+            for ml in ['IONIQ 5','IONIQ 6','IONIQ 9','Santa Fe','Elantra HEV',
+                       'Kona Electric','Tucson PHEV','Palisade HEV']:
+                if reste.upper().startswith(ml.upper()):
+                    modele, version = ml, reste[len(ml):].strip()
+                    break
+            else:
+                parts_v = reste.split(' ', 1)
+                modele  = parts_v[0]
+                version = parts_v[1] if len(parts_v) > 1 else ''
+
+            records.append({
+                'date_rdv': date_rdv, 'heure_rdv': heure_rdv,
+                'nom': f"{prenom} {nom_famille}".strip(),
+                'telephone': telephone.replace('+1','').strip(),
+                'email': email,
+                'adresse': f"{adresse}, {ville} {code_postal}".strip(', '),
+                'annee_veh': annee_veh, 'marque': marque,
+                'modele': modele, 'version': version,
+                'vin': vin, 'km': int(km_raw) if km_raw else 0,
+            })
+        except:
+            continue
+    return records, None
+
+@app.route('/import/xls', methods=['POST'])
+def import_xls():
+    f = request.files.get('xls_file')
+    if not f or not f.filename:
+        return redirect('/import?msg=Aucun+fichier+reçu')
+    records, erreur = parser_xls_vauto(f.read())
+    if erreur:
+        return redirect(f'/import?msg=Erreur:+{erreur}')
+    inseres, maj = 0, 0
+    conn = get_db()
+    for r in records:
+        ex = conn.execute('SELECT id FROM clients_service WHERE vin=?', (r['vin'],)).fetchone()
+        if ex:
+            conn.execute('''UPDATE clients_service SET
+                date_rdv=?,heure_rdv=?,nom=?,telephone=?,email=?,adresse=?,
+                annee_veh=?,marque=?,modele=?,version=?,km=?,date_import=?,source=?
+                WHERE vin=?''', (
+                r['date_rdv'],r['heure_rdv'],r['nom'],r['telephone'],r['email'],
+                r['adresse'],r['annee_veh'],r['marque'],r['modele'],r['version'],
+                r['km'],datetime.now().strftime('%Y-%m-%d'),'vauto_xls',r['vin']))
+            maj += 1
+        else:
+            conn.execute('''INSERT INTO clients_service
+                (date_rdv,heure_rdv,nom,telephone,email,adresse,
+                 annee_veh,marque,modele,version,vin,km,date_import,source,statut)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
+                r['date_rdv'],r['heure_rdv'],r['nom'],r['telephone'],r['email'],
+                r['adresse'],r['annee_veh'],r['marque'],r['modele'],r['version'],
+                r['vin'],r['km'],datetime.now().strftime('%Y-%m-%d'),'vauto_xls','nouveau'))
+            inseres += 1
+    conn.commit(); conn.close()
+    return redirect(f'/clients?msg={inseres}+nouveaux,+{maj}+mis+à+jour')
 
 @app.route('/import/csv', methods=['POST'])
 def import_csv():
